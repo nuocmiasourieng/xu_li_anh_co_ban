@@ -4,215 +4,251 @@ import numpy as np
 from PIL import Image
 import io
 
-# ---------------------- CẤU HÌNH TRANG ----------------------
-st.set_page_config(page_title="Xử lý Ảnh Chuyên Nghiệp", layout="wide")
-st.title("🎨 Ứng dụng Xử Lý Ảnh - Tách kênh màu, Độ sáng, Tương phản, Lật, Cân bằng Histogram")
+# ---------------------- CẤU HÌNH GIAO DIỆN MÀU ĐEN - VÀNG ----------------------
+st.set_page_config(page_title="Xử Lý Ảnh Pro", layout="wide", initial_sidebar_state="collapsed")
 
-# Khởi tạo session_state để lưu ảnh gốc và ảnh đang xử lý
+# CSS tùy chỉnh để có nền đen, chữ vàng, các nút vàng đậm
+st.markdown("""
+<style>
+    /* Toàn bộ nền ứng dụng */
+    .stApp {
+        background-color: #0e1117;
+    }
+    /* Tiêu đề chính */
+    h1, h2, h3, .stMarkdown {
+        color: #FFD700 !important;
+    }
+    /* Các label, text */
+    .stSlider label, .stSelectbox label, .stCheckbox label {
+        color: #FFD700 !important;
+        font-weight: bold;
+    }
+    /* Nút bấm chính */
+    .stButton > button {
+        background-color: #FFD700;
+        color: #000000;
+        font-weight: bold;
+        border-radius: 8px;
+        border: none;
+        padding: 0.5rem 1rem;
+        transition: 0.3s;
+    }
+    .stButton > button:hover {
+        background-color: #e6c200;
+        color: #000000;
+        transform: scale(1.02);
+    }
+    /* Thanh slider */
+    .stSlider div[data-baseweb="slider"] div {
+        background-color: #FFD700;
+    }
+    /* Khung thông báo info */
+    .stAlert {
+        background-color: #1e1e1e;
+        border-left: 5px solid #FFD700;
+    }
+    /* Đường kẻ phân cách */
+    hr {
+        border-color: #FFD700;
+    }
+    /* Sidebar (nếu dùng) nhưng ta ẩn đi */
+    .css-1d391kg {
+        background-color: #0e1117;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("⚡ Ứng dụng Xử lý Ảnh Chuyên Nghiệp")
+st.caption("Giao diện Đen - Vàng | Tách kênh RGB | Độ sáng/Tương phản | Lật | Cân bằng Histogram")
+
+# ---------------------- KHỞI TẠO SESSION STATE ----------------------
 if "original_img" not in st.session_state:
-    st.session_state.original_img = None
+    st.session_state.original_img = None      # ảnh gốc (BGR)
 if "processed_img" not in st.session_state:
-    st.session_state.processed_img = None
+    st.session_state.processed_img = None     # ảnh đã qua xử lý (BGR)
 if "brightness" not in st.session_state:
     st.session_state.brightness = 0
 if "contrast" not in st.session_state:
     st.session_state.contrast = 1.0
 
-# ---------------------- HÀM TIỆN ÍCH ----------------------
-def load_image(image_file):
-    """Đọc ảnh từ file upload (PIL -> OpenCV BGR)"""
-    pil_img = Image.open(image_file)
-    # Chuyển PIL (RGB) sang OpenCV (BGR)
-    cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-    return cv_img
+# ---------------------- HÀM XỬ LÝ ----------------------
+def load_image(uploaded_file):
+    """Đọc ảnh từ file upload -> trả về ảnh BGR (OpenCV)"""
+    pil_img = Image.open(uploaded_file).convert("RGB")
+    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-def apply_brightness_contrast(img, brightness=0, contrast=1.0):
+def apply_brightness_contrast(img, brightness, contrast):
     """
-    Điều chỉnh độ sáng và tương phản theo công thức:
-    G(x,y) = α * F(x,y) + β
-    Với pivot = 127.5 để tránh cháy sáng/tối.
-    brightness: giá trị từ -100 đến 100 (sẽ chuyển thành β)
-    contrast: giá trị từ 0.1 đến 3.0 (α)
+    Điều chỉnh độ sáng & tương phản theo công thức có pivot 127.5 (giống Photoshop)
+    brightness: -100 -> 100
+    contrast: 0.1 -> 3.0
     """
-    # Chuyển đổi brightness (thanh trượt -100..100) sang beta thực tế
-    beta = brightness  # Thực chất brightness từ slider là beta trực tiếp? 
-    # Nhưng công thức chuẩn: beta = brightness * 127.5 / 100? 
-    # Trong tài liệu dùng pivot: adjusted_beta = 127.5*(1-α) + β
-    # Tôi sẽ làm đơn giản: dùng cv2.convertScaleAbs với alpha=contrast, beta=brightness
-    # Tuy nhiên để giống Photoshop pivot, ta làm thủ công:
-    # Lưu ý: img là uint8, cần chuyển sang float để tính
-    img_float = img.astype(np.float32)
-    # Công thức với pivot
     alpha = contrast
+    beta = brightness
+    # Công thức với pivot
     pivot = 127.5
-    adjusted = alpha * (img_float - pivot) + pivot + brightness
-    # Giới hạn giá trị về [0,255]
+    img_float = img.astype(np.float32)
+    adjusted = alpha * (img_float - pivot) + pivot + beta
     adjusted = np.clip(adjusted, 0, 255)
     return adjusted.astype(np.uint8)
 
-def adjust_brightness_contrast_wrapper():
-    """Hàm bọc để cập nhật ảnh từ các thanh trượt"""
+def update_processed_from_original():
+    """Cập nhật processed_img từ original_img, reset brightness/contrast"""
     if st.session_state.original_img is not None:
-        img = st.session_state.original_img.copy()
-        bright = st.session_state.brightness
-        cont = st.session_state.contrast
-        st.session_state.processed_img = apply_brightness_contrast(img, bright, cont)
+        st.session_state.processed_img = st.session_state.original_img.copy()
+        st.session_state.brightness = 0
+        st.session_state.contrast = 1.0
 
-def update_processed_img(new_img):
-    """Cập nhật ảnh đã xử lý và reset brightness/contrast về mặc định"""
-    st.session_state.processed_img = new_img.copy()
-    st.session_state.brightness = 0
-    st.session_state.contrast = 1.0
+def update_preview():
+    """Hiển thị ảnh hiện tại (processed_img sau khi áp dụng sáng/tương phản)"""
+    if st.session_state.processed_img is None:
+        return
+    # Áp dụng sáng/tương phản lên ảnh full (nhưng để hiển thị ta vẫn dùng full, 
+    # thực tế Streamlit tự scale nên không cần cache nhỏ)
+    bright = st.session_state.brightness
+    cont = st.session_state.contrast
+    display = apply_brightness_contrast(st.session_state.processed_img, bright, cont)
+    display_rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+    return display_rgb
 
-# ---------------------- GIAO DIỆN CHÍNH ----------------------
-# Chia 2 cột: bên trái hiển thị ảnh, bên phải bảng điều khiển
-col_left, col_right = st.columns([2, 1])
+# ---------------------- BỐ CỤC GIAO DIỆN ----------------------
+col_left, col_right = st.columns([2.5, 1.2], gap="medium")
 
 with col_left:
-    st.subheader("📸 Ảnh hiện tại")
-    # Nếu chưa có ảnh thì hiển thị placeholder
+    st.subheader("📸 Vùng làm việc")
     if st.session_state.processed_img is not None:
-        # Chuyển OpenCV BGR sang RGB để hiển thị với st.image
-        display_img = cv2.cvtColor(st.session_state.processed_img, cv2.COLOR_BGR2RGB)
-        st.image(display_img, use_container_width=True)
+        img_display = update_preview()
+        st.image(img_display, use_container_width=True, caption="Ảnh đang xử lý")
     else:
         st.info("👈 Hãy tải ảnh lên từ bảng điều khiển bên phải")
 
 with col_right:
-    st.subheader("🛠️ Bảng điều khiển")
+    st.markdown("## 🛠️ Bảng điều khiển")
     
-    # ---------- NHÓM QUẢN LÝ TỆP ----------
-    st.markdown("### 📂 Quản lý Tệp")
-    uploaded_file = st.file_uploader("Mở Ảnh Mới", type=["jpg", "jpeg", "png", "bmp"])
-    if uploaded_file is not None:
-        img_cv = load_image(uploaded_file)
-        st.session_state.original_img = img_cv.copy()
-        st.session_state.processed_img = img_cv.copy()
-        st.session_state.brightness = 0
-        st.session_state.contrast = 1.0
-        st.success("Đã tải ảnh thành công!")
-        st.rerun()  # Làm mới để hiển thị ảnh ngay
+    # --------------------- NHÓM 1: QUẢN LÝ TỆP ---------------------
+    with st.expander("📂 Quản lý Tệp", expanded=True):
+        uploaded_file = st.file_uploader("Mở Ảnh Mới", type=["jpg", "jpeg", "png", "bmp"], key="file_uploader")
+        if uploaded_file is not None:
+            img_cv = load_image(uploaded_file)
+            st.session_state.original_img = img_cv.copy()
+            st.session_state.processed_img = img_cv.copy()
+            st.session_state.brightness = 0
+            st.session_state.contrast = 1.0
+            st.success("✅ Đã tải ảnh thành công!")
+            st.rerun()
+        
+        col_save, col_reset = st.columns(2)
+        with col_save:
+            if st.button("💾 Lưu Ảnh", use_container_width=True):
+                if st.session_state.processed_img is not None:
+                    bright = st.session_state.brightness
+                    cont = st.session_state.contrast
+                    final = apply_brightness_contrast(st.session_state.processed_img, bright, cont)
+                    final_rgb = cv2.cvtColor(final, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(final_rgb)
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="PNG")
+                    st.download_button("⬇️ Tải xuống", data=buf.getvalue(), file_name="anh_da_xu_ly.png", mime="image/png", key="download_btn")
+                else:
+                    st.warning("Chưa có ảnh để lưu")
+        with col_reset:
+            if st.button("🔄 Khôi phục gốc", use_container_width=True):
+                if st.session_state.original_img is not None:
+                    st.session_state.processed_img = st.session_state.original_img.copy()
+                    st.session_state.brightness = 0
+                    st.session_state.contrast = 1.0
+                    st.rerun()
+                else:
+                    st.warning("Chưa có ảnh gốc")
     
-    col_save, col_reset = st.columns(2)
-    with col_save:
-        if st.button("💾 Lưu Ảnh", use_container_width=True):
-            if st.session_state.processed_img is not None:
-                # Chuyển ảnh đang xử lý sang RGB để lưu
-                save_img_rgb = cv2.cvtColor(st.session_state.processed_img, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(save_img_rgb)
-                buf = io.BytesIO()
-                pil_img.save(buf, format="PNG")
-                byte_im = buf.getvalue()
-                st.download_button(
-                    label="📥 Tải xuống",
-                    data=byte_im,
-                    file_name="anh_da_xu_ly.png",
-                    mime="image/png",
-                    key="download_btn"
-                )
-            else:
-                st.warning("Chưa có ảnh để lưu")
-    with col_reset:
-        if st.button("🔄 Khôi phục Ảnh Gốc", use_container_width=True):
-            if st.session_state.original_img is not None:
-                st.session_state.processed_img = st.session_state.original_img.copy()
-                st.session_state.brightness = 0
-                st.session_state.contrast = 1.0
+    st.divider()
+    
+    # --------------------- NHÓM 2: ÁNH SÁNG & TƯƠNG PHẢN ---------------------
+    with st.expander("☀️ Ánh sáng & Tương phản", expanded=True):
+        if st.session_state.processed_img is not None:
+            brightness = st.slider("Độ sáng", -100, 100, st.session_state.brightness, key="bright")
+            contrast = st.slider("Độ tương phản", 10, 300, int(st.session_state.contrast*100), key="contr") / 100.0
+            if brightness != st.session_state.brightness or contrast != st.session_state.contrast:
+                st.session_state.brightness = brightness
+                st.session_state.contrast = contrast
                 st.rerun()
-            else:
-                st.warning("Chưa có ảnh gốc")
+        else:
+            st.info("Mở ảnh trước khi điều chỉnh")
+    
+    st.divider()
+    
+    # --------------------- NHÓM 3: TÁCH KÊNH MÀU ---------------------
+    with st.expander("🎨 Tách kênh màu", expanded=False):
+        if st.session_state.processed_img is not None:
+            col_r, col_g, col_b = st.columns(3)
+            with col_r:
+                if st.button("🔴 Kênh R", use_container_width=True):
+                    img = st.session_state.processed_img.copy()
+                    img[:, :, 0] = 0  # B
+                    img[:, :, 1] = 0  # G
+                    st.session_state.processed_img = img
+                    st.rerun()
+            with col_g:
+                if st.button("🟢 Kênh G", use_container_width=True):
+                    img = st.session_state.processed_img.copy()
+                    img[:, :, 0] = 0  # B
+                    img[:, :, 2] = 0  # R
+                    st.session_state.processed_img = img
+                    st.rerun()
+            with col_b:
+                if st.button("🔵 Kênh B", use_container_width=True):
+                    img = st.session_state.processed_img.copy()
+                    img[:, :, 1] = 0  # G
+                    img[:, :, 2] = 0  # R
+                    st.session_state.processed_img = img
+                    st.rerun()
+        else:
+            st.info("Chưa có ảnh")
+    
+    st.divider()
+    
+    # --------------------- NHÓM 4: BIẾN ĐỔI & HIỆU ỨNG ---------------------
+    with st.expander("🔄 Biến đổi & Hiệu ứng", expanded=False):
+        if st.session_state.processed_img is not None:
+            col_fh, col_fv = st.columns(2)
+            with col_fh:
+                if st.button("↔️ Lật ngang", use_container_width=True):
+                    st.session_state.processed_img = cv2.flip(st.session_state.processed_img, 1)
+                    st.rerun()
+            with col_fv:
+                if st.button("↕️ Lật dọc", use_container_width=True):
+                    st.session_state.processed_img = cv2.flip(st.session_state.processed_img, 0)
+                    st.rerun()
+            
+            st.markdown("**Nhân đôi màu (x2)**")
+            col_mr, col_mg, col_mb = st.columns(3)
+            with col_mr:
+                if st.button("Nhân R"):
+                    img = st.session_state.processed_img.copy()
+                    img[:, :, 2] = cv2.convertScaleAbs(img[:, :, 2], alpha=2.0)
+                    st.session_state.processed_img = img
+                    st.rerun()
+            with col_mg:
+                if st.button("Nhân G"):
+                    img = st.session_state.processed_img.copy()
+                    img[:, :, 1] = cv2.convertScaleAbs(img[:, :, 1], alpha=2.0)
+                    st.session_state.processed_img = img
+                    st.rerun()
+            with col_mb:
+                if st.button("Nhân B"):
+                    img = st.session_state.processed_img.copy()
+                    img[:, :, 0] = cv2.convertScaleAbs(img[:, :, 0], alpha=2.0)
+                    st.session_state.processed_img = img
+                    st.rerun()
+            
+            if st.button("📊 Cân bằng Histogram", use_container_width=True):
+                gray = cv2.cvtColor(st.session_state.processed_img, cv2.COLOR_BGR2GRAY)
+                eq = cv2.equalizeHist(gray)
+                st.session_state.processed_img = cv2.cvtColor(eq, cv2.COLOR_GRAY2BGR)
+                st.rerun()
+        else:
+            st.info("Chưa có ảnh")
 
-    st.divider()
-    
-    # ---------- NHÓM ÁNH SÁNG & TƯƠNG PHẢN ----------
-    st.markdown("### ☀️ Ánh sáng & Tương phản")
-    if st.session_state.original_img is not None:
-        bright_val = st.slider("Độ sáng", -100, 100, st.session_state.brightness, key="bright_slider")
-        cont_val = st.slider("Độ tương phản", 10, 300, int(st.session_state.contrast*100), key="cont_slider") / 100.0
-        if bright_val != st.session_state.brightness or cont_val != st.session_state.contrast:
-            st.session_state.brightness = bright_val
-            st.session_state.contrast = cont_val
-            adjust_brightness_contrast_wrapper()
-            st.rerun()
-    else:
-        st.info("Hãy mở ảnh trước")
-    
-    st.divider()
-    
-    # ---------- NHÓM TÁCH KÊNH MÀU ----------
-    st.markdown("### 🎨 Tách kênh màu (R, G, B)")
-    col_r, col_g, col_b = st.columns(3)
-    if st.session_state.processed_img is not None:
-        img_temp = st.session_state.processed_img.copy()
-        with col_r:
-            if st.button("🔴 Kênh R", use_container_width=True):
-                # Giữ kênh đỏ (OpenCV: kênh 2 là R), set 2 kênh kia về 0
-                tach = img_temp.copy()
-                tach[:, :, 0] = 0  # B
-                tach[:, :, 1] = 0  # G
-                update_processed_img(tach)
-                st.rerun()
-        with col_g:
-            if st.button("🟢 Kênh G", use_container_width=True):
-                tach = img_temp.copy()
-                tach[:, :, 0] = 0  # B
-                tach[:, :, 2] = 0  # R
-                update_processed_img(tach)
-                st.rerun()
-        with col_b:
-            if st.button("🔵 Kênh B", use_container_width=True):
-                tach = img_temp.copy()
-                tach[:, :, 1] = 0  # G
-                tach[:, :, 2] = 0  # R
-                update_processed_img(tach)
-                st.rerun()
-    else:
-        st.info("Chưa có ảnh")
-    
-    st.divider()
-    
-    # ---------- NHÓM BIẾN ĐỔI & HIỆU ỨNG ----------
-    st.markdown("### 🔄 Biến đổi & Hiệu ứng")
-    col_flip_h, col_flip_v = st.columns(2)
-    if st.session_state.processed_img is not None:
-        with col_flip_h:
-            if st.button("🔄 Lật ngang", use_container_width=True):
-                flipped = cv2.flip(st.session_state.processed_img, 1)
-                update_processed_img(flipped)
-                st.rerun()
-        with col_flip_v:
-            if st.button("↕️ Lật dọc", use_container_width=True):
-                flipped = cv2.flip(st.session_state.processed_img, 0)
-                update_processed_img(flipped)
-                st.rerun()
-        
-        st.markdown("#### 🧪 Nhân màu (tăng cường 1 kênh)")
-        col_mul_r, col_mul_g, col_mul_b = st.columns(3)
-        with col_mul_r:
-            if st.button("Nhân đôi kênh R"):
-                img_mul = st.session_state.processed_img.copy()
-                img_mul[:, :, 2] = cv2.convertScaleAbs(img_mul[:, :, 2], alpha=2.0)
-                update_processed_img(img_mul)
-                st.rerun()
-        with col_mul_g:
-            if st.button("Nhân đôi kênh G"):
-                img_mul = st.session_state.processed_img.copy()
-                img_mul[:, :, 1] = cv2.convertScaleAbs(img_mul[:, :, 1], alpha=2.0)
-                update_processed_img(img_mul)
-                st.rerun()
-        with col_mul_b:
-            if st.button("Nhân đôi kênh B"):
-                img_mul = st.session_state.processed_img.copy()
-                img_mul[:, :, 0] = cv2.convertScaleAbs(img_mul[:, :, 0], alpha=2.0)
-                update_processed_img(img_mul)
-                st.rerun()
-        
-        if st.button("📊 Cân bằng Histogram", use_container_width=True):
-            # Chuyển sang grayscale, equalize, rồi chuyển lại BGR
-            gray = cv2.cvtColor(st.session_state.processed_img, cv2.COLOR_BGR2GRAY)
-            eq_gray = cv2.equalizeHist(gray)
-            eq_bgr = cv2.cvtColor(eq_gray, cv2.COLOR_GRAY2BGR)
-            update_processed_img(eq_bgr)
-            st.rerun()
-    else:
-        st.info("Chưa có ảnh để thực hiện")
+# ---------------------- FOOTER ----------------------
+st.markdown("---")
+st.markdown("<p style='text-align: center; color: #FFD700;'>✨ Ứng dụng xử lý ảnh chuyên nghiệp - Giao diện Đen Vàng ✨</p>", unsafe_allow_html=True)
